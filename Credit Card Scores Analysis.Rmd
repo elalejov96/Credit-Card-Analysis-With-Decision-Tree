@@ -1,0 +1,295 @@
+---
+title: "Credit Card Record Analysis"
+output: html_document
+date: "2024-03-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Credit Card Score Analysis
+
+Importing Libraries
+
+```{r libraries, echo=TRUE, results=hide}
+library(readxl)
+library(tidyverse) # data manipulation
+library(ggplot2) # grafics
+library(magrittr) # %>%
+library(dplyr)
+library(rpart)
+library(caret)
+library(rsample)
+library(recipes)
+library(themis)     # Handling imbalanced data
+```
+
+
+## Importar datos
+
+```{r, echo=FALSE}
+Datos_MOD1 <- read_excel("D:\\OneDrive - Universidad San Francisco de Quito\\DATA SCIENCE\\Diplomado PUCE\\Módulo 7 - Machine Learning\\Deber 2\\default of credit card clients.xls")
+
+```
+
+
+```{r Datos, echo=TRUE, results=hide}}
+View(Datos_MOD1)
+```
+
+## Data Exploration
+
+```{r}
+names(Datos_MOD1)[which(names(Datos_MOD1) == "default payment next month")] <-"default"
+Datos_MOD1 %$% str(default)
+```
+
+Default refers to the expectation of the client to pay next month or not
+
+```{r}
+Datos_MOD1 %<>%
+  mutate( default = factor(default,
+                    levels= c("1","0"),
+                    labels= c("yes", "no"))) -> Datos_MOD1
+Datos_MOD1 %<>%
+  mutate( SEX = factor(SEX),
+          EDUCATION = factor(EDUCATION),
+          MARRIAGE = factor(MARRIAGE)) -> Datos_MOD1
+
+Datos_MOD1 %<>%
+  mutate( PAY_0 = factor(PAY_0),
+          PAY_2= factor(PAY_2),
+          PAY_3= factor(PAY_3),
+          PAY_4= factor(PAY_4),
+          PAY_5= factor(PAY_5),
+          PAY_6= factor(PAY_6)) -> Datos_MOD1
+```
+
+
+## Explore the balancing of the default payment
+
+```{r}
+
+Datos_MOD1 %>%
+group_by(default) %>%
+  summarise( Frec= n()) %>%
+  mutate(Prop= Frec/ sum(Frec) ) 
+
+```
+
+## Summary of the variables
+
+We include the NA values with useNA="ifany"
+
+```{r}
+
+summary(Datos_MOD1)
+
+# Frequency table for the variable SEX
+cat("Frequency table for the variable SEX:\n")
+table_sex <- table(Datos_MOD1$SEX)
+print(table_sex)
+
+# Frequency table for the variable EDUCATION
+cat("\nFrequency table for the variable EDUCATION:\n")
+table_education <- table(Datos_MOD1$EDUCATION)
+print(table_education)
+
+# Frequency table for the variable MARRIAGE
+cat("\nFrequency table for the variable MARRIAGE:\n")
+table_marriage <- table(Datos_MOD1$MARRIAGE)
+print(table_marriage)
+
+# Frequency table for the variable PAY_0
+cat("\nFrequency table for the variable PAY_0:\n")
+table_pay_0 <- table(Datos_MOD1$PAY_0, useNA = "ifany")
+print(table_pay_0)
+
+# Frequency table for the variable PAY_2
+cat("\nFrequency table for the variable PAY_2:\n")
+table_pay_2 <- table(Datos_MOD1$PAY_2, useNA = "ifany")
+print(table_pay_2)
+
+# Frequency table for the variable PAY_3
+cat("\nFrequency table for the variable PAY_3:\n")
+table_pay_3 <- table(Datos_MOD1$PAY_3, useNA = "ifany")
+print(table_pay_3)
+
+# Frequency table for the variable PAY_4
+cat("\nFrequency table for the variable PAY_4:\n")
+table_pay_4 <- table(Datos_MOD1$PAY_4, useNA = "ifany")
+print(table_pay_4)
+
+# Frequency table for the variable PAY_5
+cat("\nFrequency table for the variable PAY_5:\n")
+table_pay_5 <- table(Datos_MOD1$PAY_5, useNA = "ifany")
+print(table_pay_5)
+
+# Frequency table for the variable PAY_6
+cat("\nFrequency table for the variable PAY_6:\n")
+table_pay_6 <- table(Datos_MOD1$PAY_6, useNA = "ifany")
+print(table_pay_6)
+
+
+
+print(paste("The mean of ages is: ",mean(Datos_MOD1$AGE)))
+
+```
+
+## Data Visualization
+
+```{r}
+
+# Create a histogram for the column "AGE" (numeric)
+hist(Datos_MOD1$AGE, main = "Age Histogram", xlab = "Age")
+
+# Create a bar plot for categorical variables (factor)
+barplot(table(Datos_MOD1$SEX), main = "Gender Distribution")
+barplot(table(Datos_MOD1$EDUCATION), main = "Education Distribution")
+barplot(table(Datos_MOD1$MARRIAGE), main = "Marital Status Distribution")
+
+
+```
+
+##  Outliers Detection
+
+```{r}
+
+boxplot(Datos_MOD1$LIMIT_BAL, main = "LIMIT_BAL Boxplot")
+
+```
+
+
+## Correlations
+
+```{r}
+# Calculate the correlation matrix for numeric variables
+correlation_matrix <- cor(Datos_MOD1[, c("LIMIT_BAL", "AGE", "BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6", "PAY_AMT1", "PAY_AMT2", "PAY_AMT3", "PAY_AMT4", "PAY_AMT5", "PAY_AMT6")])
+
+# Visualize the correlation matrix
+heatmap(correlation_matrix)
+```
+
+## Train - Test Split
+
+We will divide the data in 80/20 train test so we can later apply a decision tree model. The seed is set to a fix number so it can be replicated
+
+```{r}
+set.seed(1234) # Seed for randomization
+data_split <- Datos_MOD1 %>%
+  initial_split(prop = 0.8,
+                strata = default)
+train <- training(data_split)
+dim(train)
+
+test <- testing(datos_split)
+dim(test)
+
+```
+
+## Preprocessing
+
+```{r}
+# Initialize recipe object
+rct_data <- train %>% 
+  recipe(default ~ ., data = ., role = "predictor") %>%
+  # Normalize numeric predictors
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  # Group infrequent levels of categorical predictors into "other"
+  step_other(all_nominal(), -all_outcomes()) %>%
+  # Convert categorical predictors into dummy variables
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  # Remove near-zero variance predictors
+  step_nzv() %>%
+  # Upsample minority class to address class imbalance
+  themis::step_upsample(y, over_ratio = 0.9, skip = TRUE, seed = 123) %>%
+  # Subsample dataset to reduce size
+  step_sample(size = 5000, skip = TRUE, seed = 456)
+
+```
+We can ignore the warning since the selectors not being used wont be a problem for the project
+
+## Resampling
+
+Set 5 groups (folds) with the same 'default' variable distribution
+
+```{r}
+set.seed(1234)
+cv_data <- vfold_cv(train, v = 5, repeats = 1, strata = default)
+cv_data
+```
+
+## Decision Tree
+
+```{r}
+# Create the Decision Tree model
+tree_model <- rpart(default ~ ., data = Datos_MOD1)
+```
+
+
+## Grid Search
+
+```{r}
+# Define the hyperparameter grid search
+grid <- expand.grid(cp = seq(0.01, 0.1, by = 0.01))
+
+# Perform hyperparameter search using cross-validation
+tree_model <- train(default ~ ., data = Datos_MOD1, method = "rpart", tuneGrid = grid, trControl = trainControl(method = "cv"))
+
+# Visualize the results of hyperparameter search
+print(tree_model)
+```
+
+
+## Training with Optimal Value
+
+```{r}
+optimal_cp <- 0.1
+tree_model <- rpart(default ~ ., data = train, control = rpart.control(cp = optimal_cp))
+
+predictions <- predict(tree_model, newdata = test, type = "class")
+
+# Evaluate the model on the 'test' set
+confusion_matrix <- table(predictions, test$default)
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+
+# Visualize the confusion matrix
+print(confusion_matrix)
+
+# Show the model accuracy
+print(paste("Accuracy:", accuracy))
+
+```
+
+## Calculate sensitivity
+
+```{r}
+sensitivity <- confusion_matrix[2, 2] / sum(confusion_matrix[2, ])
+specificity <- confusion_matrix[1, 1] / sum(confusion_matrix[1, ])
+print(paste("Sensitivity:", sensitivity))
+print(paste("Specificity:", specificity))
+```
+
+## Conclusions
+
+### Data Exploration:
+- We observed that the target variable "default" is imbalanced, with approximately 22.12% of clients expected to default next month.
+- The dataset contains information about demographic factors such as gender, education, and marital status, as well as payment history and credit amounts.
+
+### Data Preprocessing:
+- We converted categorical variables into factors and normalized numeric predictors.
+- Handling imbalanced data, we upsampled the minority class and subsampled the dataset to reduce its size.
+
+### Model Training and Evaluation:
+- We split the dataset into training and testing sets with an 80/20 ratio.
+- Utilizing cross-validation with 5 folds and grid search, we tuned hyperparameters for a decision tree model.
+- The model achieved an accuracy of approximately 73.6% on the test set.
+- Sensitivity, which measures the proportion of actual positives that are correctly identified as such, was found to be 28.3%, indicating the model's ability to detect true defaults.
+- Specificity, representing the proportion of actual negatives that are correctly identified, was calculated at 85.5%, suggesting the model's capacity to recognize true non-defaults.
+
+Overall, the decision tree model demonstrates moderate performance in predicting credit card defaults. Further optimization and exploration of alternative algorithms may enhance model accuracy and predictive power.
+
+
+
+
